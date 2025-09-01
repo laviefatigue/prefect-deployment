@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: prefect-postgres
+    environment:
+      POSTGRES_DB: prefect
+      POSTGRES_USER: prefect
+      POSTGRES_PASSWORD: prefect_password_change_me
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U prefect -d prefect"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Redis Cache (optional but recommended)
+  redis:
+    image: redis:7-alpine
+    container_name: prefect-redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Prefect Server
+  server:
+    image: prefecthq/prefect:3-latest
+    container_name: prefect-server
+    restart: unless-stopped
+    volumes:
+      - prefect_data:/root/.prefect
+    entrypoint: ["/opt/prefect/entrypoint.sh", "prefect", "server", "start"]
+    environment:
+      PREFECT_UI_URL: http://0.0.0.0:4200/api
+      PREFECT_API_URL: http://0.0.0.0:4200/api
+      PREFECT_SERVER_API_HOST: 0.0.0.0
+      PREFECT_SERVER_API_PORT: 4200
+      PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://prefect:prefect_password_change_me@postgres:5432/prefect
+      PREFECT_SERVER_ANALYTICS_ENABLED: false
+    ports:
+      - "4200:4200"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4200/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Prefect Worker (runs your workflows)
+  worker:
+    image: prefecthq/prefect:3-latest
+    container_name: prefect-worker
+    restart: unless-stopped
+    entrypoint: ["/opt/prefect/entrypoint.sh", "prefect", "worker", "start", "--pool", "default-process-pool"]
+    environment:
+      PREFECT_API_URL: http://server:4200/api
+    depends_on:
+      server:
+        condition: service_healthy
+    volumes:
+      - prefect_data:/root/.prefect
+      # Mount this if you want to run local Python files
+      - ./flows:/opt/prefect/flows
+
+volumes:
+  postgres_data:
+  prefect_data:
